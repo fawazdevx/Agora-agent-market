@@ -9,10 +9,13 @@ import {
   Activity,
   BadgeCheck,
   Bot,
+  CheckCircle2,
   CircleDollarSign,
+  CircleX,
   ExternalLink,
   Filter,
   Gauge,
+  Info,
   LineChart,
   RadioTower,
   RefreshCw,
@@ -87,6 +90,12 @@ const demoSignals = [
 ];
 
 const sentimentActions = ["LONG", "SHORT", "HEDGE", "WATCH"];
+const priceFeeds = {
+  "BTC-USD": { id: "bitcoin", label: "CoinGecko BTC/USD", url: "https://www.coingecko.com/en/coins/bitcoin" },
+  "ETH-USD": { id: "ethereum", label: "CoinGecko ETH/USD", url: "https://www.coingecko.com/en/coins/ethereum" },
+  "SOL-USD": { id: "solana", label: "CoinGecko SOL/USD", url: "https://www.coingecko.com/en/coins/solana" },
+  "ARB-USD": { id: "arbitrum", label: "CoinGecko ARB/USD", url: "https://www.coingecko.com/en/coins/arbitrum" }
+};
 
 function shortAddress(value) {
   if (!value) return "";
@@ -111,6 +120,25 @@ function statusName(status) {
 
 function toDisplayNumber(value) {
   return Number(value || 0).toLocaleString(undefined, { maximumFractionDigits: 2 });
+}
+
+function bpsToPercent(value) {
+  return `${(Number(value || 0) / 100).toFixed(2)}%`;
+}
+
+function isDirectionalAction(action) {
+  return action === "LONG" || action === "SHORT";
+}
+
+async function fetchUsdPrice(market) {
+  const feed = priceFeeds[market];
+  if (!feed) throw new Error(`No demo price feed configured for ${market}.`);
+  const response = await fetch(`https://api.coingecko.com/api/v3/simple/price?ids=${feed.id}&vs_currencies=usd`);
+  if (!response.ok) throw new Error("Price feed request failed.");
+  const data = await response.json();
+  const price = data?.[feed.id]?.usd;
+  if (!price) throw new Error(`No USD price returned for ${market}.`);
+  return { price: String(price), evidenceURI: feed.url, label: feed.label };
 }
 
 function scoreAgent(agent) {
@@ -204,13 +232,37 @@ function Metric({ icon: Icon, label, value, detail }) {
   );
 }
 
-function SignalCard({ signal, followedAgents, isOwner, pending, onResolveSignal, onToggleFollow }) {
+function Toasts({ items, onDismiss }) {
+  return (
+    <div className="toast-stack" aria-live="polite" aria-atomic="false">
+      {items.map((item) => {
+        const Icon = item.type === "error" ? CircleX : item.type === "success" ? CheckCircle2 : Info;
+        return (
+          <article className={`toast toast-${item.type}`} key={item.id}>
+            <Icon size={18} />
+            <div>
+              <b>{item.title}</b>
+              {item.body && <p>{item.body}</p>}
+            </div>
+            <button type="button" className="toast-close" onClick={() => onDismiss(item.id)} aria-label="Dismiss notification">
+              ×
+            </button>
+          </article>
+        );
+      })}
+    </div>
+  );
+}
+
+function SignalCard({ signal, followedAgents, isOwner, isResolver, pending, onAutoResolveSignal, onFetchPrice, onResolveSignal, onToggleFollow }) {
   const status = statusName(signal.status);
   const quality = getQualityBreakdown(signal);
   const explanation = getSignalExplanation(signal);
   const isFollowed = followedAgents.includes(signal.agent);
   const canResolve = isOwner && status === "Open" && typeof signal.id === "number";
+  const canAutoResolve = isResolver && status === "Open" && typeof signal.id === "number" && isDirectionalAction(signal.action);
   const [cardResolution, setCardResolution] = useState({ status: "1", evidenceURI: "" });
+  const [autoResolution, setAutoResolution] = useState({ finalPrice: "", evidenceURI: priceFeeds[signal.market]?.url || "" });
 
   return (
     <article className="signal-card">
@@ -305,6 +357,61 @@ function SignalCard({ signal, followedAgents, isOwner, pending, onResolveSignal,
             <BadgeCheck size={16} />
             Resolve from card
           </button>
+        </form>
+      )}
+      {canAutoResolve && (
+        <form className="card-resolver auto-resolver" onSubmit={(event) => event.preventDefault()}>
+          <div className="card-resolver-head">
+            <Gauge size={15} />
+            <b>Auto-resolve by market price</b>
+          </div>
+          <div className="card-resolver-grid">
+            <label>
+              Final price
+              <input
+                type="number"
+                min="0"
+                step="0.01"
+                value={autoResolution.finalPrice}
+                onChange={(event) => setAutoResolution({ ...autoResolution, finalPrice: event.target.value })}
+                placeholder="Fetch or enter USD price"
+              />
+            </label>
+            <label>
+              Evidence link
+              <input
+                value={autoResolution.evidenceURI}
+                onChange={(event) => setAutoResolution({ ...autoResolution, evidenceURI: event.target.value })}
+                placeholder="https://..."
+              />
+            </label>
+          </div>
+          <div className="button-row">
+            <button
+              type="button"
+              className="secondary"
+              disabled={pending !== ""}
+              onClick={async () => {
+                try {
+                  const next = await onFetchPrice(signal.market);
+                  setAutoResolution({ finalPrice: next.price, evidenceURI: next.evidenceURI });
+                } catch {
+                  // Notification is handled by the parent fetch wrapper.
+                }
+              }}
+            >
+              <RefreshCw size={16} />
+              Fetch price
+            </button>
+            <button
+              type="button"
+              disabled={pending !== "" || autoResolution.finalPrice === ""}
+              onClick={() => onAutoResolveSignal(signal.id, autoResolution.finalPrice, autoResolution.evidenceURI)}
+            >
+              <BadgeCheck size={16} />
+              Auto-resolve
+            </button>
+          </div>
         </form>
       )}
     </article>
@@ -504,6 +611,14 @@ function App() {
   const [signals, setSignals] = useState([]);
   const [minStake, setMinStake] = useState(1);
   const [owner, setOwner] = useState("");
+  const [protocol, setProtocol] = useState({
+    feeRecipient: "",
+    resolver: "",
+    protocolFeeBps: 0,
+    resolverFeeBps: 0,
+    protocolRevenue: 0,
+    resolverRevenue: 0
+  });
   const [selectedAgentAddress, setSelectedAgentAddress] = useState("");
   const [followedAgents, setFollowedAgents] = useState(() => {
     try {
@@ -524,6 +639,7 @@ function App() {
   const [balance, setBalance] = useState(0n);
   const [pending, setPending] = useState("");
   const [message, setMessage] = useState("");
+  const [notifications, setNotifications] = useState([]);
   const [resolution, setResolution] = useState({ signalId: "", status: "1", evidenceURI: "" });
   const [form, setForm] = useState({
     agentName: "Macro Scout",
@@ -567,6 +683,8 @@ function App() {
   const openSignals = allSignals.filter((signal) => statusName(signal.status) === "Open").length;
   const needsApproval = allowance < stakeUnits;
   const isOwner = owner && address && owner.toLowerCase() === address.toLowerCase();
+  const isResolver =
+    isOwner || (protocol.resolver && address && protocol.resolver.toLowerCase() === address.toLowerCase());
   const agentRows = useMemo(() => {
     const rows = new Map();
     for (const signal of allSignals) {
@@ -608,21 +726,39 @@ function App() {
   }, [allSignals]);
   const selectedAgent = agentRows.find((agent) => agent.agent === selectedAgentAddress) || agentRows[0];
 
+  function notify(type, title, body = "") {
+    const id = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    setNotifications((current) => [{ id, type, title, body }, ...current].slice(0, 5));
+    window.setTimeout(() => {
+      setNotifications((current) => current.filter((item) => item.id !== id));
+    }, type === "error" ? 8000 : 5000);
+  }
+
+  function dismissNotification(id) {
+    setNotifications((current) => current.filter((item) => item.id !== id));
+  }
+
   function toggleFollow(agent) {
     setFollowedAgents((current) => {
       const next = current.includes(agent) ? current.filter((item) => item !== agent) : [...current, agent];
       localStorage.setItem("agora-followed-agents", JSON.stringify(next));
+      notify(next.includes(agent) ? "success" : "info", next.includes(agent) ? "Agent added to watchlist" : "Agent removed from watchlist", shortAddress(agent));
       return next;
     });
   }
 
   async function ensureArc() {
     if (!isConnected) throw new Error("Connect a wallet first.");
-    if (!onArc) await switchChainAsync({ chainId: arcTestnet.id });
+    if (!onArc) {
+      notify("info", "Switching network", "Approve the Arc Testnet switch in your wallet.");
+      await switchChainAsync({ chainId: arcTestnet.id });
+      notify("success", "Connected to Arc Testnet");
+    }
   }
 
-  async function loadOnchain() {
+  async function loadOnchain(showNotification = false) {
     if (!configured || !publicClient) return;
+    if (showNotification) notify("info", "Refreshing chain data", "Loading signals, owner, and minimum stake.");
     const [nextId, min, nextOwner] = await Promise.all([
       publicClient.readContract({ address: contracts.agoraMarket, abi: agoraMarketAbi, functionName: "nextSignalId" }),
       publicClient.readContract({ address: contracts.agoraMarket, abi: agoraMarketAbi, functionName: "minStake" }),
@@ -630,6 +766,26 @@ function App() {
     ]);
     setMinStake(Number(formatUnits(min, 6)));
     setOwner(nextOwner);
+    try {
+      const [feeRecipient, resolverAddress, nextProtocolFeeBps, nextResolverFeeBps, nextProtocolRevenue, nextResolverRevenue] = await Promise.all([
+        publicClient.readContract({ address: contracts.agoraMarket, abi: agoraMarketAbi, functionName: "feeRecipient" }),
+        publicClient.readContract({ address: contracts.agoraMarket, abi: agoraMarketAbi, functionName: "resolver" }),
+        publicClient.readContract({ address: contracts.agoraMarket, abi: agoraMarketAbi, functionName: "protocolFeeBps" }),
+        publicClient.readContract({ address: contracts.agoraMarket, abi: agoraMarketAbi, functionName: "resolverFeeBps" }),
+        publicClient.readContract({ address: contracts.agoraMarket, abi: agoraMarketAbi, functionName: "protocolRevenue" }),
+        publicClient.readContract({ address: contracts.agoraMarket, abi: agoraMarketAbi, functionName: "resolverRevenue" })
+      ]);
+      setProtocol({
+        feeRecipient,
+        resolver: resolverAddress,
+        protocolFeeBps: Number(nextProtocolFeeBps),
+        resolverFeeBps: Number(nextResolverFeeBps),
+        protocolRevenue: Number(formatUnits(nextProtocolRevenue, 6)),
+        resolverRevenue: Number(formatUnits(nextResolverRevenue, 6))
+      });
+    } catch {
+      setProtocol((current) => ({ ...current, protocolFeeBps: 0, resolverFeeBps: 0 }));
+    }
 
     const count = Number(nextId);
     const ids = Array.from({ length: count }, (_, index) => count - index - 1);
@@ -653,30 +809,37 @@ function App() {
       })
     );
     setSignals(rows);
+    if (showNotification) notify("success", "Chain data refreshed", `${rows.length} signals loaded.`);
   }
 
-  async function loadWalletState() {
+  async function loadWalletState(showNotification = false) {
     if (!configured || !publicClient || !address) return;
+    if (showNotification) notify("info", "Checking wallet", "Loading USDC balance and allowance.");
     const [nextAllowance, nextBalance] = await Promise.all([
       publicClient.readContract({ address: contracts.usdc, abi: usdcAbi, functionName: "allowance", args: [address, contracts.agoraMarket] }),
       publicClient.readContract({ address: contracts.usdc, abi: usdcAbi, functionName: "balanceOf", args: [address] })
     ]);
     setAllowance(nextAllowance);
     setBalance(nextBalance);
+    if (showNotification) notify("success", "Wallet state updated", `${Number(formatUnits(nextBalance, 6)).toFixed(2)} USDC available.`);
   }
 
   async function approveStake() {
     try {
       setPending("Approving USDC");
       setMessage("");
+      notify("info", "Approval started", "Confirm the USDC approval in your wallet.");
       await ensureArc();
       if (!configured) throw new Error("The market contract is not connected.");
       const hash = await walletClient.writeContract({ address: contracts.usdc, abi: usdcAbi, functionName: "approve", args: [contracts.agoraMarket, stakeUnits] });
+      notify("info", "Approval submitted", "Waiting for Arc confirmation.");
       await publicClient.waitForTransactionReceipt({ hash });
       setMessage(`USDC approved: ${txUrl(hash)}`);
+      notify("success", "USDC approved", txUrl(hash));
       await loadWalletState();
     } catch (error) {
       setMessage(error.message);
+      notify("error", "Approval failed", error.message);
     } finally {
       setPending("");
     }
@@ -686,6 +849,7 @@ function App() {
     try {
       setPending("Publishing signal");
       setMessage("");
+      notify("info", "Publishing started", "Confirm the signal transaction in your wallet.");
       await ensureArc();
       if (!configured) throw new Error("The market contract is not connected.");
       if (allowance < stakeUnits) throw new Error("Approve USDC stake before publishing.");
@@ -704,11 +868,14 @@ function App() {
           BigInt(dateToUnix(form.deadline))
         ]
       });
+      notify("info", "Signal submitted", "Waiting for Arc confirmation.");
       await publicClient.waitForTransactionReceipt({ hash });
       setMessage(`Signal published: ${txUrl(hash)}`);
+      notify("success", "Signal published", txUrl(hash));
       await Promise.all([loadOnchain(), loadWalletState()]);
     } catch (error) {
       setMessage(error.message);
+      notify("error", "Publish failed", error.message);
     } finally {
       setPending("");
     }
@@ -716,38 +883,90 @@ function App() {
 
   async function resolveSignal(signalId = resolution.signalId, status = resolution.status, evidenceURI = resolution.evidenceURI) {
     try {
+      const nextSignalId = signalId && typeof signalId === "object" ? resolution.signalId : signalId;
+      const nextStatus = signalId && typeof signalId === "object" ? resolution.status : status;
+      const nextEvidenceURI = signalId && typeof signalId === "object" ? resolution.evidenceURI : evidenceURI;
       setPending("Resolving signal");
       setMessage("");
+      notify("info", "Resolution started", `Resolving Signal #${nextSignalId}. Confirm in your wallet.`);
       await ensureArc();
       if (!isOwner) throw new Error("Only the market owner can resolve signals.");
-      if (signalId === "" || signalId === undefined) throw new Error("Choose a signal to resolve.");
+      if (nextSignalId === "" || nextSignalId === undefined) throw new Error("Choose a signal to resolve.");
       const hash = await walletClient.writeContract({
         address: contracts.agoraMarket,
         abi: agoraMarketAbi,
         functionName: "resolveSignal",
-        args: [BigInt(signalId), Number(status), evidenceURI]
+        args: [BigInt(nextSignalId), Number(nextStatus), nextEvidenceURI]
       });
+      notify("info", "Resolution submitted", "Waiting for Arc confirmation.");
       await publicClient.waitForTransactionReceipt({ hash });
       setMessage(`Signal resolved: ${txUrl(hash)}`);
+      notify("success", `Signal #${nextSignalId} resolved`, txUrl(hash));
       setResolution({ signalId: "", status: "1", evidenceURI: "" });
       await loadOnchain();
     } catch (error) {
       setMessage(error.message);
+      notify("error", "Resolution failed", error.message);
     } finally {
       setPending("");
     }
   }
 
+  async function autoResolveSignal(signalId, finalPrice, evidenceURI) {
+    try {
+      setPending("Auto-resolving signal");
+      setMessage("");
+      notify("info", "Auto-resolution started", `Submitting Signal #${signalId} with final price ${finalPrice}.`);
+      await ensureArc();
+      if (!isResolver) throw new Error("Connect the owner or resolver wallet.");
+      const hash = await walletClient.writeContract({
+        address: contracts.agoraMarket,
+        abi: agoraMarketAbi,
+        functionName: "autoResolveSignal",
+        args: [BigInt(signalId), parseUnits(String(finalPrice || "0"), 6), evidenceURI]
+      });
+      notify("info", "Auto-resolution submitted", "Waiting for Arc confirmation.");
+      await publicClient.waitForTransactionReceipt({ hash });
+      setMessage(`Signal auto-resolved: ${txUrl(hash)}`);
+      notify("success", `Signal #${signalId} auto-resolved`, txUrl(hash));
+      await Promise.all([loadOnchain(), loadWalletState()]);
+    } catch (error) {
+      setMessage(error.message);
+      notify("error", "Auto-resolution failed", error.message);
+    } finally {
+      setPending("");
+    }
+  }
+
+  async function loadPriceForMarket(market) {
+    try {
+      notify("info", "Fetching market price", `Loading ${market} from public price data.`);
+      const price = await fetchUsdPrice(market);
+      notify("success", "Price loaded", `${market}: $${toDisplayNumber(price.price)}`);
+      return price;
+    } catch (error) {
+      notify("error", "Price fetch failed", error.message);
+      throw error;
+    }
+  }
+
   useEffect(() => {
-    loadOnchain().catch((error) => setMessage(error.message));
+    loadOnchain().catch((error) => {
+      setMessage(error.message);
+      notify("error", "Could not load chain data", error.message);
+    });
   }, [publicClient, configured]);
 
   useEffect(() => {
-    loadWalletState().catch((error) => setMessage(error.message));
+    loadWalletState().catch((error) => {
+      setMessage(error.message);
+      notify("error", "Could not load wallet state", error.message);
+    });
   }, [publicClient, address, configured]);
 
   return (
     <main>
+      <Toasts items={notifications} onDismiss={dismissNotification} />
       <header className="topbar">
         <div className="brand">
           <RadioTower size={24} />
@@ -764,7 +983,7 @@ function App() {
             Publish time-bound calls, settle outcomes on Arc, and build reputation from performance.
           </p>
           <div className="hero-actions">
-            <button onClick={loadOnchain}>
+            <button onClick={() => loadOnchain(true).catch((error) => notify("error", "Refresh failed", error.message))}>
               <RefreshCw size={16} />
               Refresh chain
             </button>
@@ -791,14 +1010,22 @@ function App() {
             <span>Min stake</span>
             <b>{minStake} USDC</b>
           </div>
+          <div className="terminal-row">
+            <span>Protocol fee</span>
+            <b>{bpsToPercent(protocol.protocolFeeBps)}</b>
+          </div>
+          <div className="terminal-row">
+            <span>Resolver fee</span>
+            <b>{bpsToPercent(protocol.resolverFeeBps)}</b>
+          </div>
         </div>
       </section>
 
       <section className="metrics">
         <Metric icon={Activity} label="Signals" value={allSignals.length} detail={`${visibleSignals.length} shown in feed`} />
         <Metric icon={CircleDollarSign} label="USDC staked" value={totalStake.toLocaleString()} detail="Capital at risk on Arc" />
+        <Metric icon={CircleDollarSign} label="Protocol revenue" value={toDisplayNumber(protocol.protocolRevenue)} detail="USDC fees and lost stake" />
         <Metric icon={Gauge} label="Open calls" value={openSignals} detail="Awaiting settlement" />
-        <Metric icon={ShieldCheck} label="Settlement" value="Onchain" detail="Arc finality and USDC" />
       </section>
 
       <section className="overview">
@@ -1006,7 +1233,10 @@ function App() {
                   signal={signal}
                   followedAgents={followedAgents}
                   isOwner={isOwner}
+                  isResolver={isResolver}
                   pending={pending}
+                  onAutoResolveSignal={autoResolveSignal}
+                  onFetchPrice={loadPriceForMarket}
                   onResolveSignal={resolveSignal}
                   onToggleFollow={toggleFollow}
                 />

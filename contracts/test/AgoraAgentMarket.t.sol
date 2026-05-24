@@ -45,6 +45,8 @@ contract AgoraAgentMarketTest is Test {
     MockUSDC private usdc;
     AgoraAgentMarket private market;
     address private agent = address(0xA11CE);
+    address private treasury = address(0xFEE);
+    address private resolver = address(0xB07);
 
     function setUp() external {
         usdc = new MockUSDC();
@@ -92,6 +94,68 @@ contract AgoraAgentMarketTest is Test {
         assertEq(signals, 1);
         assertEq(wins, 1);
         assertEq(rewards, 2_000_000);
+    }
+
+    function testProtocolFeeOnPublish() external {
+        market.initializeV2(treasury, resolver, 200, 500);
+
+        vm.startPrank(agent);
+        usdc.approve(address(market), 2_000_000);
+        market.publishSignal(
+            "Macro Scout", "BTC-USD", "Upside", "LONG", 2_000_000, 120_000e6, 78, block.timestamp + 7 days
+        );
+        vm.stopPrank();
+
+        assertEq(usdc.balanceOf(treasury), 40_000);
+        assertEq(usdc.balanceOf(address(market)), 1_960_000);
+        (,,,, uint256 rewards) = market.agentStats(agent);
+        assertEq(rewards, 0);
+        assertEq(market.protocolRevenue(), 40_000);
+    }
+
+    function testAutoResolveWinningLongReturnsLockedStake() external {
+        market.initializeV2(treasury, resolver, 200, 500);
+
+        vm.startPrank(agent);
+        usdc.approve(address(market), 2_000_000);
+        market.publishSignal(
+            "Macro Scout", "BTC-USD", "Upside", "LONG", 2_000_000, 120_000e6, 78, block.timestamp + 7 days
+        );
+        vm.stopPrank();
+
+        vm.warp(block.timestamp + 8 days);
+        vm.prank(resolver);
+        market.autoResolveSignal(0, 121_000e6, "https://example.com/price");
+
+        assertEq(usdc.balanceOf(agent), 9_960_000);
+        assertEq(usdc.balanceOf(treasury), 40_000);
+        (uint256 signals, uint256 wins,,, uint256 rewards) = market.agentStats(agent);
+        assertEq(signals, 1);
+        assertEq(wins, 1);
+        assertEq(rewards, 1_960_000);
+    }
+
+    function testAutoResolveLosingLongPaysProtocolAndResolver() external {
+        market.initializeV2(treasury, resolver, 200, 500);
+
+        vm.startPrank(agent);
+        usdc.approve(address(market), 2_000_000);
+        market.publishSignal(
+            "Macro Scout", "BTC-USD", "Upside", "LONG", 2_000_000, 120_000e6, 78, block.timestamp + 7 days
+        );
+        vm.stopPrank();
+
+        vm.warp(block.timestamp + 8 days);
+        vm.prank(resolver);
+        market.autoResolveSignal(0, 119_000e6, "https://example.com/price");
+
+        assertEq(usdc.balanceOf(resolver), 98_000);
+        assertEq(usdc.balanceOf(treasury), 1_902_000);
+        assertEq(usdc.balanceOf(address(market)), 0);
+        (, uint256 wins, uint256 losses,,) = market.agentStats(agent);
+        assertEq(wins, 0);
+        assertEq(losses, 1);
+        assertEq(market.resolverRevenue(), 98_000);
     }
 
     function testUpgradePreservesState() external {

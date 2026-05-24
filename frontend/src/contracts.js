@@ -60,12 +60,77 @@ export const agoraMarketAbi = [
   },
   {
     type: "function",
+    name: "feeRecipient",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ name: "", type: "address" }]
+  },
+  {
+    type: "function",
+    name: "resolver",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ name: "", type: "address" }]
+  },
+  {
+    type: "function",
+    name: "protocolFeeBps",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ name: "", type: "uint256" }]
+  },
+  {
+    type: "function",
+    name: "resolverFeeBps",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ name: "", type: "uint256" }]
+  },
+  {
+    type: "function",
+    name: "protocolRevenue",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ name: "", type: "uint256" }]
+  },
+  {
+    type: "function",
+    name: "resolverRevenue",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ name: "", type: "uint256" }]
+  },
+  {
+    type: "function",
     name: "resolveSignal",
     stateMutability: "nonpayable",
     inputs: [
       { name: "signalId", type: "uint256" },
       { name: "status", type: "uint8" },
       { name: "evidenceURI", type: "string" }
+    ],
+    outputs: []
+  },
+  {
+    type: "function",
+    name: "autoResolveSignal",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "signalId", type: "uint256" },
+      { name: "finalPrice", type: "uint256" },
+      { name: "evidenceURI", type: "string" }
+    ],
+    outputs: []
+  },
+  {
+    type: "function",
+    name: "setProtocolConfig",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "newFeeRecipient", type: "address" },
+      { name: "newResolver", type: "address" },
+      { name: "newProtocolFeeBps", type: "uint256" },
+      { name: "newResolverFeeBps", type: "uint256" }
     ],
     outputs: []
   },

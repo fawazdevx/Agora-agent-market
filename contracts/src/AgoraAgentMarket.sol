@@ -46,6 +46,13 @@ contract AgoraAgentMarket {
     uint256 public nextSignalId;
     uint256 public minStake;
     bool private initialized;
+    bool private v2Initialized;
+    address public feeRecipient;
+    address public resolver;
+    uint256 public protocolFeeBps;
+    uint256 public resolverFeeBps;
+    uint256 public protocolRevenue;
+    uint256 public resolverRevenue;
 
     mapping(uint256 => Signal) public signals;
     mapping(address => AgentStats) public agentStats;
@@ -63,6 +70,10 @@ contract AgoraAgentMarket {
     );
     event SignalResolved(uint256 indexed signalId, SignalStatus status, string evidenceURI);
     event StakeWithdrawn(uint256 indexed signalId, address indexed agent, uint256 amount);
+    event ProtocolConfigUpdated(address indexed feeRecipient, address indexed resolver, uint256 protocolFeeBps, uint256 resolverFeeBps);
+    event ProtocolFeeCollected(uint256 indexed signalId, address indexed payer, uint256 amount);
+    event AutoResolved(uint256 indexed signalId, uint256 finalPrice, SignalStatus status);
+    event ResolverPaid(uint256 indexed signalId, address indexed resolver, uint256 amount);
 
     modifier onlyOwner() {
         _onlyOwner();
@@ -94,6 +105,17 @@ contract AgoraAgentMarket {
         minStake = initialMinStake;
         emit OwnershipTransferred(address(0), msg.sender);
         emit MinStakeUpdated(initialMinStake);
+    }
+
+    function initializeV2(
+        address initialFeeRecipient,
+        address initialResolver,
+        uint256 initialProtocolFeeBps,
+        uint256 initialResolverFeeBps
+    ) external onlyOwner {
+        require(!v2Initialized, "v2 already initialized");
+        v2Initialized = true;
+        _setProtocolConfig(initialFeeRecipient, initialResolver, initialProtocolFeeBps, initialResolverFeeBps);
     }
 
     function _onlyOwner() internal view {
@@ -153,6 +175,31 @@ contract AgoraAgentMarket {
         emit MinStakeUpdated(newMinStake);
     }
 
+    function setProtocolConfig(
+        address newFeeRecipient,
+        address newResolver,
+        uint256 newProtocolFeeBps,
+        uint256 newResolverFeeBps
+    ) external onlyOwner {
+        _setProtocolConfig(newFeeRecipient, newResolver, newProtocolFeeBps, newResolverFeeBps);
+    }
+
+    function _setProtocolConfig(
+        address newFeeRecipient,
+        address newResolver,
+        uint256 newProtocolFeeBps,
+        uint256 newResolverFeeBps
+    ) internal {
+        require(newFeeRecipient != address(0), "fee recipient required");
+        require(newProtocolFeeBps <= 1_000, "protocol fee too high");
+        require(newResolverFeeBps <= 1_000, "resolver fee too high");
+        feeRecipient = newFeeRecipient;
+        resolver = newResolver;
+        protocolFeeBps = newProtocolFeeBps;
+        resolverFeeBps = newResolverFeeBps;
+        emit ProtocolConfigUpdated(newFeeRecipient, newResolver, newProtocolFeeBps, newResolverFeeBps);
+    }
+
     function publishSignal(
         string calldata agentName,
         string calldata market,
@@ -171,34 +218,94 @@ contract AgoraAgentMarket {
         require(confidence > 0 && confidence <= 100, "bad confidence");
         require(deadline > block.timestamp, "deadline in past");
 
-        require(usdc.transferFrom(msg.sender, address(this), stakeAmount), "stake transfer failed");
-
         signalId = nextSignalId;
         nextSignalId += 1;
-
-        signals[signalId] = Signal({
-            agent: msg.sender,
-            agentName: agentName,
-            market: market,
-            thesis: thesis,
-            action: action,
-            stakeAmount: stakeAmount,
-            targetPrice: targetPrice,
-            confidence: confidence,
-            deadline: deadline,
-            createdAt: block.timestamp,
-            status: SignalStatus.Open,
-            evidenceURI: ""
-        });
+        uint256 lockedStake = _collectStake(signalId, stakeAmount);
+        _storeSignal(signalId, agentName, market, thesis, action, lockedStake, targetPrice, confidence, deadline);
 
         AgentStats storage stats = agentStats[msg.sender];
         stats.signals += 1;
-        stats.stakeVolume += stakeAmount;
+        stats.stakeVolume += lockedStake;
 
-        emit SignalPublished(signalId, msg.sender, market, action, stakeAmount, confidence, deadline);
+        _emitSignalPublished(signalId, market, action, lockedStake, confidence, deadline);
+    }
+
+    function _collectStake(uint256 signalId, uint256 stakeAmount) internal returns (uint256 lockedStake) {
+        uint256 protocolFee = feeRecipient == address(0) ? 0 : (stakeAmount * protocolFeeBps) / 10_000;
+        lockedStake = stakeAmount - protocolFee;
+        require(lockedStake >= minStake, "net stake too small");
+
+        require(usdc.transferFrom(msg.sender, address(this), stakeAmount), "stake transfer failed");
+        if (protocolFee > 0) {
+            protocolRevenue += protocolFee;
+            require(usdc.transfer(feeRecipient, protocolFee), "fee transfer failed");
+            emit ProtocolFeeCollected(signalId, msg.sender, protocolFee);
+        }
+    }
+
+    function _storeSignal(
+        uint256 signalId,
+        string calldata agentName,
+        string calldata market,
+        string calldata thesis,
+        string calldata action,
+        uint256 lockedStake,
+        uint256 targetPrice,
+        uint256 confidence,
+        uint256 deadline
+    ) internal {
+        Signal storage signal = signals[signalId];
+        signal.agent = msg.sender;
+        signal.agentName = agentName;
+        signal.market = market;
+        signal.thesis = thesis;
+        signal.action = action;
+        signal.stakeAmount = lockedStake;
+        signal.targetPrice = targetPrice;
+        signal.confidence = confidence;
+        signal.deadline = deadline;
+        signal.createdAt = block.timestamp;
+        signal.status = SignalStatus.Open;
+    }
+
+    function _emitSignalPublished(
+        uint256 signalId,
+        string calldata market,
+        string calldata action,
+        uint256 lockedStake,
+        uint256 confidence,
+        uint256 deadline
+    ) internal {
+        emit SignalPublished(signalId, msg.sender, market, action, lockedStake, confidence, deadline);
     }
 
     function resolveSignal(uint256 signalId, SignalStatus status, string calldata evidenceURI) external onlyOwner {
+        _resolveSignal(signalId, status, evidenceURI, address(0));
+    }
+
+    function autoResolveSignal(uint256 signalId, uint256 finalPrice, string calldata evidenceURI) external {
+        require(msg.sender == owner || msg.sender == resolver, "only resolver");
+        Signal storage signal = signals[signalId];
+        require(signal.createdAt != 0 || signalId < nextSignalId, "unknown signal");
+        require(signal.status == SignalStatus.Open, "already resolved");
+        require(block.timestamp >= signal.deadline, "deadline active");
+        require(signal.targetPrice > 0, "target required");
+        require(_isDirectional(signal.action), "unsupported action");
+
+        SignalStatus status = _isWinningDirectional(signal.action, finalPrice, signal.targetPrice)
+            ? SignalStatus.Won
+            : SignalStatus.Lost;
+
+        _resolveSignal(signalId, status, evidenceURI, msg.sender);
+        emit AutoResolved(signalId, finalPrice, status);
+    }
+
+    function _resolveSignal(
+        uint256 signalId,
+        SignalStatus status,
+        string calldata evidenceURI,
+        address resolverPayee
+    ) internal {
         Signal storage signal = signals[signalId];
         require(signal.createdAt != 0 || signalId < nextSignalId, "unknown signal");
         require(signal.status == SignalStatus.Open, "already resolved");
@@ -215,12 +322,36 @@ contract AgoraAgentMarket {
             emit StakeWithdrawn(signalId, signal.agent, signal.stakeAmount);
         } else if (status == SignalStatus.Lost) {
             stats.losses += 1;
+            uint256 resolverFee = resolverPayee == address(0) ? 0 : (signal.stakeAmount * resolverFeeBps) / 10_000;
+            uint256 protocolShare = signal.stakeAmount - resolverFee;
+            if (resolverFee > 0) {
+                resolverRevenue += resolverFee;
+                require(usdc.transfer(resolverPayee, resolverFee), "resolver fee failed");
+                emit ResolverPaid(signalId, resolverPayee, resolverFee);
+            }
+            if (protocolShare > 0 && feeRecipient != address(0)) {
+                protocolRevenue += protocolShare;
+                require(usdc.transfer(feeRecipient, protocolShare), "protocol share failed");
+            }
         } else if (status == SignalStatus.Cancelled) {
             require(usdc.transfer(signal.agent, signal.stakeAmount), "stake return failed");
             emit StakeWithdrawn(signalId, signal.agent, signal.stakeAmount);
         }
 
         emit SignalResolved(signalId, status, evidenceURI);
+    }
+
+    function _isDirectional(string memory action) internal pure returns (bool) {
+        bytes32 value = keccak256(bytes(action));
+        return value == keccak256("LONG") || value == keccak256("SHORT");
+    }
+
+    function _isWinningDirectional(string memory action, uint256 finalPrice, uint256 targetPrice) internal pure returns (bool) {
+        bytes32 value = keccak256(bytes(action));
+        if (value == keccak256("LONG")) {
+            return finalPrice >= targetPrice;
+        }
+        return finalPrice <= targetPrice;
     }
 
     function sweepLostStake(address recipient, uint256 amount) external onlyOwner {

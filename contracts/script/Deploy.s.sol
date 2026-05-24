@@ -14,6 +14,12 @@ contract Deploy is Script {
         implementation = new AgoraAgentMarket();
         proxy = new ERC1967Proxy(address(implementation), abi.encodeCall(AgoraAgentMarket.initialize, (usdc, minStake)));
         market = AgoraAgentMarket(address(proxy));
+        market.initializeV2(
+            vm.envOr("FEE_RECIPIENT", msg.sender),
+            vm.envOr("RESOLVER", msg.sender),
+            vm.envOr("PROTOCOL_FEE_BPS", uint256(200)),
+            vm.envOr("RESOLVER_FEE_BPS", uint256(500))
+        );
         vm.stopBroadcast();
     }
 }
