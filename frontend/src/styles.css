@@ -291,6 +291,101 @@ label {
   padding: 0 clamp(16px, 4vw, 56px) 22px;
 }
 
+.sentiment-panel {
+  background: white;
+  border: 1px solid #dce5df;
+  border-radius: 8px;
+  margin: 0 clamp(16px, 4vw, 56px) 22px;
+  padding: 20px;
+}
+
+.sentiment-list {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.sentiment-card {
+  background: #f9fbf8;
+  border: 1px solid #dce5df;
+  border-radius: 8px;
+  padding: 16px;
+}
+
+.sentiment-head {
+  align-items: flex-start;
+  display: flex;
+  gap: 14px;
+  justify-content: space-between;
+}
+
+.sentiment-head h3 {
+  font-size: 20px;
+  margin: 0;
+}
+
+.sentiment-head strong {
+  background: #edf5f0;
+  border-radius: 999px;
+  color: #163d34;
+  font-size: 12px;
+  margin: 0;
+  padding: 7px 10px;
+}
+
+.sentiment-bars {
+  display: grid;
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.sentiment-row {
+  align-items: center;
+  display: grid;
+  gap: 10px;
+  grid-template-columns: 54px 1fr 42px;
+}
+
+.sentiment-row span,
+.sentiment-row b {
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.sentiment-row b {
+  margin: 0;
+  text-align: right;
+}
+
+.sentiment-track {
+  background: #e1e8e4;
+  border-radius: 999px;
+  height: 9px;
+  overflow: hidden;
+}
+
+.sentiment-fill {
+  border-radius: inherit;
+  height: 100%;
+  min-width: 3px;
+}
+
+.sentiment-long {
+  background: #48c78e;
+}
+
+.sentiment-short {
+  background: #f87171;
+}
+
+.sentiment-hedge {
+  background: #60a5fa;
+}
+
+.sentiment-watch {
+  background: #facc15;
+}
+
 .stack {
   display: grid;
   gap: 22px;
@@ -325,6 +420,28 @@ label {
 .leaderboard-row b,
 .watchlist-row b {
   margin-top: 0;
+}
+
+.badge-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.agent-badge {
+  background: #edf5f0;
+  border: 1px solid #d6e7de;
+  border-radius: 999px;
+  color: #2f7d63;
+  display: inline-flex;
+  font-size: 11px;
+  font-weight: 900;
+  padding: 4px 8px;
+}
+
+.profile-badges {
+  margin-top: 10px;
 }
 
 .leaderboard-row:hover,
@@ -603,6 +720,18 @@ textarea {
   padding: 18px;
 }
 
+.signal-id {
+  background: #edf5f0;
+  border: 1px solid #d6e7de;
+  border-radius: 999px;
+  color: #2f7d63;
+  display: inline-flex;
+  font-size: 12px;
+  font-weight: 900;
+  margin-bottom: 10px;
+  padding: 5px 9px;
+}
+
 .signal-head {
   align-items: flex-start;
   display: flex;
@@ -756,6 +885,28 @@ b {
   padding: 12px 0 0;
 }
 
+.card-resolver {
+  background: white;
+  border: 1px solid #e1e8e4;
+  border-radius: 8px;
+  margin-top: 14px;
+  padding: 14px;
+}
+
+.card-resolver-head {
+  align-items: center;
+  color: #163d34;
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.card-resolver-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: 160px 1fr;
+}
+
 code {
   background: rgba(22, 61, 52, 0.08);
   border-radius: 5px;
@@ -838,6 +989,7 @@ button.secondary,
 .leaderboard,
 .profile-panel,
 .watchlist-panel,
+.sentiment-panel,
 .composer,
 .feed,
 .resolver,
@@ -905,8 +1057,10 @@ textarea:focus {
 .watchlist-row,
 .profile-stats span,
 .profile-signal,
+.sentiment-card,
 .signal-grid span,
-.explanation {
+.explanation,
+.card-resolver {
   background: #101615;
   border-color: rgba(238, 245, 242, 0.08);
 }
@@ -926,6 +1080,22 @@ textarea:focus {
 
 .profile-head strong {
   background: rgba(99, 214, 158, 0.11);
+}
+
+.agent-badge,
+.signal-id,
+.sentiment-head strong {
+  background: rgba(99, 214, 158, 0.1);
+  border-color: rgba(99, 214, 158, 0.18);
+  color: #9be8c1;
+}
+
+.card-resolver-head {
+  color: #b7f0d6;
+}
+
+.sentiment-track {
+  background: rgba(238, 245, 242, 0.08);
 }
 
 .notice {
@@ -974,6 +1144,7 @@ textarea:focus {
   .intelligence,
   .rails,
   .workspace,
+  .sentiment-list,
   .metrics {
     grid-template-columns: 1fr;
   }
@@ -1001,6 +1172,7 @@ textarea:focus {
   .two-col,
   .filter-grid,
   .resolver-grid,
+  .card-resolver-grid,
   .signal-grid,
   .profile-stats {
     grid-template-columns: 1fr;

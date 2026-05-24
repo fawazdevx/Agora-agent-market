@@ -86,6 +86,8 @@ const demoSignals = [
   }
 ];
 
+const sentimentActions = ["LONG", "SHORT", "HEDGE", "WATCH"];
+
 function shortAddress(value) {
   if (!value) return "";
   return `${value.slice(0, 6)}...${value.slice(-4)}`;
@@ -119,6 +121,25 @@ function scoreAgent(agent) {
       agent.consistencyScore * 0.15 -
       agent.overconfidencePenalty
   );
+}
+
+function signalLabel(signal) {
+  return typeof signal.id === "number" ? `Signal #${signal.id}` : `Demo ${String(signal.id).replace("demo-", "#")}`;
+}
+
+function getAgentBadges(agent) {
+  const badges = [];
+  const avgStake = agent.signals > 0 ? agent.stakeVolume / agent.signals : 0;
+
+  if (agent.signals < 3) badges.push("New agent");
+  if (agent.signals >= 3) badges.push("Consistent");
+  if (agent.winRate >= 70 && agent.wins >= 2) badges.push("High win rate");
+  if (avgStake >= 50) badges.push("High conviction");
+  if (agent.avgQuality >= 70) badges.push("Quality signals");
+  if (agent.losses > agent.wins && agent.losses > 0) badges.push("Risky");
+  if (agent.overconfidencePenalty >= 10) badges.push("Overconfident");
+
+  return badges.slice(0, 4);
 }
 
 function getSignalExplanation(signal) {
@@ -183,15 +204,19 @@ function Metric({ icon: Icon, label, value, detail }) {
   );
 }
 
-function SignalCard({ signal, followedAgents, onToggleFollow }) {
+function SignalCard({ signal, followedAgents, isOwner, pending, onResolveSignal, onToggleFollow }) {
   const status = statusName(signal.status);
   const quality = getQualityBreakdown(signal);
   const explanation = getSignalExplanation(signal);
   const isFollowed = followedAgents.includes(signal.agent);
+  const canResolve = isOwner && status === "Open" && typeof signal.id === "number";
+  const [cardResolution, setCardResolution] = useState({ status: "1", evidenceURI: "" });
+
   return (
     <article className="signal-card">
       <div className="signal-head">
         <div>
+          <span className="signal-id">{signalLabel(signal)}</span>
           <div className="agent-row">
             <Bot size={18} />
             <strong>{signal.agentName}</strong>
@@ -245,6 +270,43 @@ function SignalCard({ signal, followedAgents, onToggleFollow }) {
           Settlement evidence
         </a>
       )}
+      {canResolve && (
+        <form className="card-resolver" onSubmit={(event) => event.preventDefault()}>
+          <div className="card-resolver-head">
+            <BadgeCheck size={15} />
+            <b>Resolve {signalLabel(signal)}</b>
+          </div>
+          <div className="card-resolver-grid">
+            <label>
+              Outcome
+              <select
+                value={cardResolution.status}
+                onChange={(event) => setCardResolution({ ...cardResolution, status: event.target.value })}
+              >
+                <option value="1">Won</option>
+                <option value="2">Lost</option>
+                <option value="3">Cancelled</option>
+              </select>
+            </label>
+            <label>
+              Evidence link
+              <input
+                value={cardResolution.evidenceURI}
+                onChange={(event) => setCardResolution({ ...cardResolution, evidenceURI: event.target.value })}
+                placeholder="https://..."
+              />
+            </label>
+          </div>
+          <button
+            type="button"
+            disabled={pending !== ""}
+            onClick={() => onResolveSignal(signal.id, cardResolution.status, cardResolution.evidenceURI)}
+          >
+            <BadgeCheck size={16} />
+            Resolve from card
+          </button>
+        </form>
+      )}
     </article>
   );
 }
@@ -268,6 +330,9 @@ function Leaderboard({ agents, selectedAgent, onSelectAgent }) {
             <span>
               <b>{agent.agentName}</b>
               <small>{shortAddress(agent.agent)}</small>
+              <span className="badge-row">
+                {getAgentBadges(agent).map((badge) => <small className="agent-badge" key={badge}>{badge}</small>)}
+              </span>
             </span>
             <span>
               <b>{agent.winRate}%</b>
@@ -311,6 +376,9 @@ function AgentProfile({ agent }) {
         <div>
           <h3>{agent.agentName}</h3>
           <p>{shortAddress(agent.agent)}</p>
+          <div className="badge-row profile-badges">
+            {getAgentBadges(agent).map((badge) => <span className="agent-badge" key={badge}>{badge}</span>)}
+          </div>
         </div>
         <strong>{scoreAgent(agent)}</strong>
       </div>
@@ -325,11 +393,76 @@ function AgentProfile({ agent }) {
           <div className="profile-signal" key={signal.id}>
             <span className={`status status-${String(statusName(signal.status)).toLowerCase()}`}>{statusName(signal.status)}</span>
             <div>
-              <b>{signal.market}</b>
+              <b>{signalLabel(signal)} · {signal.market}</b>
               <small>{signal.action} - {signal.confidence}% confidence - {toDisplayNumber(signal.stakeAmount)} USDC</small>
             </div>
           </div>
         ))}
+      </div>
+    </section>
+  );
+}
+
+function MarketSentiment({ signals }) {
+  const markets = useMemo(() => {
+    const rows = new Map();
+    for (const signal of signals) {
+      const market = signal.market || "Unknown";
+      const action = sentimentActions.includes(signal.action) ? signal.action : "WATCH";
+      const row = rows.get(market) || {
+        market,
+        totalStake: 0,
+        actions: Object.fromEntries(sentimentActions.map((item) => [item, 0]))
+      };
+      const stake = Number(signal.stakeAmount || 0);
+      row.totalStake += stake;
+      row.actions[action] += stake;
+      rows.set(market, row);
+    }
+
+    return Array.from(rows.values())
+      .sort((a, b) => b.totalStake - a.totalStake)
+      .slice(0, 6);
+  }, [signals]);
+
+  return (
+    <section className="sentiment-panel">
+      <div className="section-title">
+        <Gauge size={20} />
+        <h2>Stake-Weighted Sentiment</h2>
+      </div>
+      <div className="sentiment-list">
+        {markets.map((market) => {
+          const leadingAction = sentimentActions.reduce((best, action) => (
+            market.actions[action] > market.actions[best] ? action : best
+          ), "LONG");
+          return (
+            <article className="sentiment-card" key={market.market}>
+              <div className="sentiment-head">
+                <div>
+                  <h3>{market.market}</h3>
+                  <small>{toDisplayNumber(market.totalStake)} USDC committed</small>
+                </div>
+                <strong>{leadingAction}</strong>
+              </div>
+              <div className="sentiment-bars">
+                {sentimentActions.map((action) => {
+                  const amount = market.actions[action];
+                  const percent = market.totalStake > 0 ? Math.round((amount / market.totalStake) * 100) : 0;
+                  return (
+                    <div className="sentiment-row" key={action}>
+                      <span>{action}</span>
+                      <div className="sentiment-track">
+                        <div className={`sentiment-fill sentiment-${action.toLowerCase()}`} style={{ width: `${percent}%` }} />
+                      </div>
+                      <b>{percent}%</b>
+                    </div>
+                  );
+                })}
+              </div>
+            </article>
+          );
+        })}
       </div>
     </section>
   );
@@ -581,17 +714,18 @@ function App() {
     }
   }
 
-  async function resolveSignal() {
+  async function resolveSignal(signalId = resolution.signalId, status = resolution.status, evidenceURI = resolution.evidenceURI) {
     try {
       setPending("Resolving signal");
       setMessage("");
       await ensureArc();
       if (!isOwner) throw new Error("Only the market owner can resolve signals.");
+      if (signalId === "" || signalId === undefined) throw new Error("Choose a signal to resolve.");
       const hash = await walletClient.writeContract({
         address: contracts.agoraMarket,
         abi: agoraMarketAbi,
         functionName: "resolveSignal",
-        args: [BigInt(resolution.signalId || 0), Number(resolution.status), resolution.evidenceURI]
+        args: [BigInt(signalId), Number(status), evidenceURI]
       });
       await publicClient.waitForTransactionReceipt({ hash });
       setMessage(`Signal resolved: ${txUrl(hash)}`);
@@ -703,6 +837,8 @@ function App() {
         </div>
         <AgentProfile agent={selectedAgent} />
       </section>
+
+      <MarketSentiment signals={allSignals} />
 
       <section className="workspace">
         <form className="composer" onSubmit={(event) => event.preventDefault()}>
@@ -865,7 +1001,15 @@ function App() {
               </div>
             ) : (
               visibleSignals.map((signal) => (
-                <SignalCard key={signal.id} signal={signal} followedAgents={followedAgents} onToggleFollow={toggleFollow} />
+                <SignalCard
+                  key={signal.id}
+                  signal={signal}
+                  followedAgents={followedAgents}
+                  isOwner={isOwner}
+                  pending={pending}
+                  onResolveSignal={resolveSignal}
+                  onToggleFollow={toggleFollow}
+                />
               ))
             )}
           </div>
