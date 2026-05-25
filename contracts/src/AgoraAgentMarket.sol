@@ -46,6 +46,10 @@ contract AgoraAgentMarket {
     uint256 public nextSignalId;
     uint256 public minStake;
     bool private initialized;
+
+    mapping(uint256 => Signal) public signals;
+    mapping(address => AgentStats) public agentStats;
+
     bool private v2Initialized;
     address public feeRecipient;
     address public resolver;
@@ -53,9 +57,6 @@ contract AgoraAgentMarket {
     uint256 public resolverFeeBps;
     uint256 public protocolRevenue;
     uint256 public resolverRevenue;
-
-    mapping(uint256 => Signal) public signals;
-    mapping(address => AgentStats) public agentStats;
 
     event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
     event MinStakeUpdated(uint256 minStake);

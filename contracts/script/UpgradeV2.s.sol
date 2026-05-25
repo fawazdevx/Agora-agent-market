@@ -16,7 +16,7 @@ contract UpgradeV2 is Script {
         implementation = new AgoraAgentMarket();
         AgoraAgentMarket(proxy).upgradeToAndCall(
             address(implementation),
-            abi.encodeCall(AgoraAgentMarket.initializeV2, (feeRecipient, resolver, protocolFeeBps, resolverFeeBps))
+            abi.encodeCall(AgoraAgentMarket.setProtocolConfig, (feeRecipient, resolver, protocolFeeBps, resolverFeeBps))
         );
         vm.stopBroadcast();
     }
