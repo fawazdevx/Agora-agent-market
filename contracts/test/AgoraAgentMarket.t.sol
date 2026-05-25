@@ -123,7 +123,6 @@ contract AgoraAgentMarketTest is Test {
         );
         vm.stopPrank();
 
-        vm.warp(block.timestamp + 8 days);
         vm.prank(resolver);
         market.autoResolveSignal(0, 121_000e6, "https://example.com/price");
 
@@ -145,7 +144,6 @@ contract AgoraAgentMarketTest is Test {
         );
         vm.stopPrank();
 
-        vm.warp(block.timestamp + 8 days);
         vm.prank(resolver);
         market.autoResolveSignal(0, 119_000e6, "https://example.com/price");
 

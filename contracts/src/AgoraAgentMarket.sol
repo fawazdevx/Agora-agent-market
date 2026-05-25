@@ -289,7 +289,6 @@ contract AgoraAgentMarket {
         Signal storage signal = signals[signalId];
         require(signal.createdAt != 0 || signalId < nextSignalId, "unknown signal");
         require(signal.status == SignalStatus.Open, "already resolved");
-        require(block.timestamp >= signal.deadline, "deadline active");
         require(signal.targetPrice > 0, "target required");
         require(_isDirectional(signal.action), "unsupported action");
 
