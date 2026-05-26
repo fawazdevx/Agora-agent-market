@@ -114,6 +114,10 @@ function unixToDate(value) {
   return new Date(Number(value) * 1000).toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
+function isExpired(signal) {
+  return signal.deadline && Number(signal.deadline) <= Math.floor(Date.now() / 1000);
+}
+
 function statusName(status) {
   return typeof status === "number" ? statusLabels[status] : status;
 }
@@ -260,7 +264,8 @@ function SignalCard({ signal, followedAgents, isOwner, isResolver, pending, onAu
   const explanation = getSignalExplanation(signal);
   const isFollowed = followedAgents.includes(signal.agent);
   const canResolve = isOwner && status === "Open" && typeof signal.id === "number";
-  const canAutoResolve = isResolver && status === "Open" && typeof signal.id === "number" && isDirectionalAction(signal.action);
+  const canAutoResolve =
+    isResolver && status === "Open" && typeof signal.id === "number" && isDirectionalAction(signal.action) && isExpired(signal);
   const [cardResolution, setCardResolution] = useState({ status: "1", evidenceURI: "" });
   const [autoResolution, setAutoResolution] = useState({ finalPrice: "", evidenceURI: priceFeeds[signal.market]?.url || "" });
 
@@ -413,6 +418,12 @@ function SignalCard({ signal, followedAgents, isOwner, isResolver, pending, onAu
             </button>
           </div>
         </form>
+      )}
+      {isResolver && status === "Open" && typeof signal.id === "number" && isDirectionalAction(signal.action) && !isExpired(signal) && (
+        <div className="resolver-note inline-resolver-note">
+          <b>Auto-resolution opens after deadline</b>
+          <span>This prevents early settlement before the signal's time window closes.</span>
+        </div>
       )}
     </article>
   );

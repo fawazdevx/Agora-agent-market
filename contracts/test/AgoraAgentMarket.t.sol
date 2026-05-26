@@ -75,6 +75,7 @@ contract AgoraAgentMarketTest is Test {
 
         assertEq(signalId, 0);
         assertEq(usdc.balanceOf(address(market)), 2_000_000);
+        assertEq(market.openStakeLiability(), 2_000_000);
         (uint256 signals,,,,) = market.agentStats(agent);
         assertEq(signals, 1);
     }
@@ -90,6 +91,7 @@ contract AgoraAgentMarketTest is Test {
         market.resolveSignal(0, AgoraAgentMarket.SignalStatus.Won, "https://example.com/evidence");
 
         assertEq(usdc.balanceOf(agent), 10_000_000);
+        assertEq(market.openStakeLiability(), 0);
         (uint256 signals, uint256 wins,,, uint256 rewards) = market.agentStats(agent);
         assertEq(signals, 1);
         assertEq(wins, 1);
@@ -123,11 +125,13 @@ contract AgoraAgentMarketTest is Test {
         );
         vm.stopPrank();
 
+        vm.warp(block.timestamp + 8 days);
         vm.prank(resolver);
         market.autoResolveSignal(0, 121_000e6, "https://example.com/price");
 
         assertEq(usdc.balanceOf(agent), 9_960_000);
         assertEq(usdc.balanceOf(treasury), 40_000);
+        assertEq(market.openStakeLiability(), 0);
         (uint256 signals, uint256 wins,,, uint256 rewards) = market.agentStats(agent);
         assertEq(signals, 1);
         assertEq(wins, 1);
@@ -144,12 +148,14 @@ contract AgoraAgentMarketTest is Test {
         );
         vm.stopPrank();
 
+        vm.warp(block.timestamp + 8 days);
         vm.prank(resolver);
         market.autoResolveSignal(0, 119_000e6, "https://example.com/price");
 
         assertEq(usdc.balanceOf(resolver), 98_000);
         assertEq(usdc.balanceOf(treasury), 1_902_000);
         assertEq(usdc.balanceOf(address(market)), 0);
+        assertEq(market.openStakeLiability(), 0);
         (, uint256 wins, uint256 losses,,) = market.agentStats(agent);
         assertEq(wins, 0);
         assertEq(losses, 1);
@@ -172,5 +178,51 @@ contract AgoraAgentMarketTest is Test {
         (, uint256 wins,,, uint256 rewards) = market.agentStats(agent);
         assertEq(wins, 0);
         assertEq(rewards, 0);
+    }
+
+    function testAutoResolveRequiresDeadline() external {
+        market.initializeV2(treasury, resolver, 200, 500);
+
+        vm.startPrank(agent);
+        usdc.approve(address(market), 2_000_000);
+        market.publishSignal(
+            "Macro Scout", "BTC-USD", "Upside", "LONG", 2_000_000, 120_000e6, 78, block.timestamp + 7 days
+        );
+        vm.stopPrank();
+
+        vm.prank(resolver);
+        vm.expectRevert("deadline active");
+        market.autoResolveSignal(0, 121_000e6, "https://example.com/price");
+    }
+
+    function testSweepCannotDrainOpenStake() external {
+        vm.startPrank(agent);
+        usdc.approve(address(market), 2_000_000);
+        market.publishSignal(
+            "Macro Scout", "BTC-USD", "Upside", "LONG", 2_000_000, 120_000e6, 78, block.timestamp + 7 days
+        );
+        vm.stopPrank();
+
+        vm.expectRevert("exceeds sweepable");
+        market.sweepLostStake(treasury, 1);
+    }
+
+    function testSyncOpenStakeLiabilityForPreUpgradeSignals() external {
+        vm.startPrank(agent);
+        usdc.approve(address(market), 4_000_000);
+        market.publishSignal(
+            "Macro Scout", "BTC-USD", "Upside", "LONG", 2_000_000, 120_000e6, 78, block.timestamp + 7 days
+        );
+        market.publishSignal(
+            "Risk Scout", "ETH-USD", "Downside", "SHORT", 2_000_000, 3_000e6, 71, block.timestamp + 7 days
+        );
+        vm.stopPrank();
+
+        uint256[] memory ids = new uint256[](2);
+        ids[0] = 0;
+        ids[1] = 1;
+        market.syncOpenStakeLiability(ids);
+
+        assertEq(market.openStakeLiability(), 4_000_000);
     }
 }

@@ -57,6 +57,8 @@ contract AgoraAgentMarket {
     uint256 public resolverFeeBps;
     uint256 public protocolRevenue;
     uint256 public resolverRevenue;
+    uint256 public openStakeLiability;
+    bool private entered;
 
     event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
     event MinStakeUpdated(uint256 minStake);
@@ -75,6 +77,7 @@ contract AgoraAgentMarket {
     event ProtocolFeeCollected(uint256 indexed signalId, address indexed payer, uint256 amount);
     event AutoResolved(uint256 indexed signalId, uint256 finalPrice, SignalStatus status);
     event ResolverPaid(uint256 indexed signalId, address indexed resolver, uint256 amount);
+    event OpenStakeLiabilitySynced(uint256 amount);
 
     modifier onlyOwner() {
         _onlyOwner();
@@ -89,6 +92,13 @@ contract AgoraAgentMarket {
     modifier notDelegated() {
         _notDelegated();
         _;
+    }
+
+    modifier nonReentrant() {
+        require(!entered, "reentrant");
+        entered = true;
+        _;
+        entered = false;
     }
 
     event Upgraded(address indexed implementation);
@@ -210,7 +220,7 @@ contract AgoraAgentMarket {
         uint256 targetPrice,
         uint256 confidence,
         uint256 deadline
-    ) external returns (uint256 signalId) {
+    ) external nonReentrant returns (uint256 signalId) {
         require(bytes(agentName).length > 0, "agent name required");
         require(bytes(market).length > 0, "market required");
         require(bytes(thesis).length > 0, "thesis required");
@@ -227,6 +237,7 @@ contract AgoraAgentMarket {
         AgentStats storage stats = agentStats[msg.sender];
         stats.signals += 1;
         stats.stakeVolume += lockedStake;
+        openStakeLiability += lockedStake;
 
         _emitSignalPublished(signalId, market, action, lockedStake, confidence, deadline);
     }
@@ -280,15 +291,16 @@ contract AgoraAgentMarket {
         emit SignalPublished(signalId, msg.sender, market, action, lockedStake, confidence, deadline);
     }
 
-    function resolveSignal(uint256 signalId, SignalStatus status, string calldata evidenceURI) external onlyOwner {
+    function resolveSignal(uint256 signalId, SignalStatus status, string calldata evidenceURI) external onlyOwner nonReentrant {
         _resolveSignal(signalId, status, evidenceURI, address(0));
     }
 
-    function autoResolveSignal(uint256 signalId, uint256 finalPrice, string calldata evidenceURI) external {
+    function autoResolveSignal(uint256 signalId, uint256 finalPrice, string calldata evidenceURI) external nonReentrant {
         require(msg.sender == owner || msg.sender == resolver, "only resolver");
         Signal storage signal = signals[signalId];
         require(signal.createdAt != 0 || signalId < nextSignalId, "unknown signal");
         require(signal.status == SignalStatus.Open, "already resolved");
+        require(block.timestamp >= signal.deadline, "deadline active");
         require(signal.targetPrice > 0, "target required");
         require(_isDirectional(signal.action), "unsupported action");
 
@@ -313,6 +325,7 @@ contract AgoraAgentMarket {
 
         signal.status = status;
         signal.evidenceURI = evidenceURI;
+        openStakeLiability -= signal.stakeAmount;
 
         AgentStats storage stats = agentStats[signal.agent];
         if (status == SignalStatus.Won) {
@@ -354,8 +367,38 @@ contract AgoraAgentMarket {
         return finalPrice <= targetPrice;
     }
 
-    function sweepLostStake(address recipient, uint256 amount) external onlyOwner {
+    function syncOpenStakeLiability(uint256[] calldata signalIds) external onlyOwner {
+        uint256 nextLiability;
+        for (uint256 i = 0; i < signalIds.length; i++) {
+            Signal storage signal = signals[signalIds[i]];
+            require(signal.createdAt != 0 || signalIds[i] < nextSignalId, "unknown signal");
+            if (signal.status == SignalStatus.Open) {
+                nextLiability += signal.stakeAmount;
+            }
+        }
+        openStakeLiability = nextLiability;
+        emit OpenStakeLiabilitySynced(nextLiability);
+    }
+
+    function sweepLostStake(address recipient, uint256 amount) external onlyOwner nonReentrant {
         require(recipient != address(0), "recipient required");
+        uint256 available = _availableSweepBalance();
+        require(amount <= available, "exceeds sweepable");
         require(usdc.transfer(recipient, amount), "sweep failed");
+    }
+
+    function availableSweepBalance() external view returns (uint256) {
+        return _availableSweepBalance();
+    }
+
+    function _availableSweepBalance() internal view returns (uint256) {
+        uint256 balance = _balanceOf(address(this));
+        return balance > openStakeLiability ? balance - openStakeLiability : 0;
+    }
+
+    function _balanceOf(address account) internal view returns (uint256 balance) {
+        (bool ok, bytes memory data) = address(usdc).staticcall(abi.encodeWithSignature("balanceOf(address)", account));
+        require(ok && data.length >= 32, "balance read failed");
+        balance = abi.decode(data, (uint256));
     }
 }

@@ -755,6 +755,10 @@ textarea {
   gap: 4px;
 }
 
+.inline-resolver-note {
+  margin: 14px 0 0;
+}
+
 .resolver-note span {
   color: #60706a;
   font-size: 13px;
